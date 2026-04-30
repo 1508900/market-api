@@ -8,7 +8,8 @@ CORS(app)
 MARKET_TICKERS = [
     "^GSPC", "^IXIC", "^STOXX50E", "ACWI", "EEM", "ILF", "MCHI", "EWY",
     "EURUSD=X", "DX-Y.NYB", "EURJPY=X", "EURGBP=X", "USDJPY=X",
-    "TTF=F", "BZ=F", "CL=F", "GC=F", "SI=F", "HG=F", "ALI=F", "NI=F", "ZNC=F"
+    "TTF=F", "BZ=F", "CL=F", "GC=F", "SI=F", "HG=F", "ALI=F", "NI=F", "ZNC=F",
+    "^VIX", "^VSTOXX"
 ]
 
 HOLDING_TICKERS = [
@@ -102,7 +103,7 @@ def all_data():
 def holdings():
     result = {}
     for ticker in HOLDING_TICKERS:
-        data = fetch_quote(ticker, range_="1mo")
+        data = fetch_quote(ticker, range_="1y")
         if data:
             result[ticker] = {
                 "ticker":  data["ticker"],
