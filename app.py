@@ -56,12 +56,26 @@ def fetch_quote(ticker, range_="3mo"):
                 ytd_change = round((price - first_2026) / first_2026 * 100, 2)
                 break
 
+        # Dividend yield
+        div_yield = None
+        try:
+            info = requests.get(
+                "https://query1.finance.yahoo.com/v8/finance/chart/" + requests.utils.quote(ticker) + "?modules=summaryDetail",
+                headers=HEADERS, timeout=6
+            ).json()
+            div_yield = info.get("quoteSummary", {}).get("result", [{}])[0].get("summaryDetail", {}).get("dividendYield", {}).get("raw")
+            if div_yield:
+                div_yield = round(float(div_yield) * 100, 2)
+        except:
+            pass
+
         return {
             "ticker":    ticker,
             "price":     round(float(price), 4),
             "prevClose": round(float(prev), 4) if prev else None,
             "change":    change,
             "ytd":       ytd_change,
+            "divYield":  div_yield,
             "high52":    round(float(meta.get("fiftyTwoWeekHigh", price)), 4),
             "low52":     round(float(meta.get("fiftyTwoWeekLow",  price)), 4),
             "dates":     dates,
