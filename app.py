@@ -5,10 +5,17 @@ import requests, datetime
 app = Flask(__name__)
 CORS(app)
 
-TICKERS = [
+MARKET_TICKERS = [
     "^GSPC", "^IXIC", "^STOXX50E", "ACWI", "EEM", "ILF", "MCHI", "EWY",
     "EURUSD=X", "DX-Y.NYB", "EURJPY=X", "EURGBP=X", "USDJPY=X",
     "TTF=F", "BZ=F", "CL=F", "GC=F", "SI=F", "HG=F", "ALI=F", "NI=F", "ZNC=F"
+]
+
+HOLDING_TICKERS = [
+    "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "BRK-B", "TSLA", "AVGO",
+    "ASML", "SAP", "TSM", "BABA", "TCEHY", "PDD", "JD", "BIDU",
+    "VALE", "PBR", "ITUB", "AMX", "FMX", "BBD",
+    "INFY", "HDB", "EWY"
 ]
 
 HEADERS = {
@@ -16,9 +23,9 @@ HEADERS = {
     "Accept": "application/json",
 }
 
-def fetch_quote(ticker):
+def fetch_quote(ticker, range_="3mo"):
     try:
-        url = "https://query1.finance.yahoo.com/v8/finance/chart/" + requests.utils.quote(ticker) + "?interval=1d&range=3mo"
+        url = "https://query1.finance.yahoo.com/v8/finance/chart/" + requests.utils.quote(ticker) + "?interval=1d&range=" + range_
         r = requests.get(url, headers=HEADERS, timeout=10)
         data = r.json()
         result = data.get("chart", {}).get("result", [])
@@ -41,11 +48,20 @@ def fetch_quote(ticker):
 
         change = round((price - prev) / prev * 100, 2) if prev else 0
 
+        # YTD: find first close of 2026
+        ytd_change = None
+        for i, d in enumerate(dates):
+            if d >= "2026-01-01":
+                first_2026 = closes[i]
+                ytd_change = round((price - first_2026) / first_2026 * 100, 2)
+                break
+
         return {
             "ticker":    ticker,
             "price":     round(float(price), 4),
             "prevClose": round(float(prev), 4) if prev else None,
             "change":    change,
+            "ytd":       ytd_change,
             "high52":    round(float(meta.get("fiftyTwoWeekHigh", price)), 4),
             "low52":     round(float(meta.get("fiftyTwoWeekLow",  price)), 4),
             "dates":     dates,
@@ -62,10 +78,24 @@ def index():
 @app.route("/api/all")
 def all_data():
     result = {}
-    for ticker in TICKERS:
+    for ticker in MARKET_TICKERS:
         data = fetch_quote(ticker)
         if data:
             result[ticker] = data
+    return jsonify(result)
+
+@app.route("/api/holdings")
+def holdings():
+    result = {}
+    for ticker in HOLDING_TICKERS:
+        data = fetch_quote(ticker, range_="1mo")
+        if data:
+            result[ticker] = {
+                "ticker":  data["ticker"],
+                "price":   data["price"],
+                "change":  data["change"],
+                "ytd":     data["ytd"],
+            }
     return jsonify(result)
 
 @app.route("/api/quote/<path:ticker>")
