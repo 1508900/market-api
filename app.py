@@ -21,8 +21,8 @@ HOLDING_TICKERS = [
 # Yahoo Finance tickers for government bond yields
 YIELD_TICKERS = {
     'US': {
-        'y1':  'DTB1YR=F',   # US 1Y Treasury
-        'y2':  '^IRX',        # US 13W (proxy)
+        'y1':  '^IRX',        # US 13W Bill (best proxy for 1Y)
+        'y2':  'ZT=F',        # US 2Y Treasury futures
         'y5':  '^FVX',        # US 5Y Treasury
         'y10': '^TNX',        # US 10Y Treasury
         'y30': '^TYX',        # US 30Y Treasury
@@ -143,8 +143,12 @@ def fetch_yield_value(ticker):
             price = result[0].get("meta", {}).get("regularMarketPrice")
             if price:
                 # TNX, FVX, TYX are in tenths of percent
-                if ticker in ['^TNX', '^TYX', '^FVX', '^IRX']:
+                if ticker in ['^TNX', '^TYX', '^FVX']:
                     return round(float(price) / 10, 2) if float(price) > 10 else round(float(price), 2)
+                if ticker == '^IRX':
+                    # IRX = 13-week T-Bill annualized, divide by 10 if > 10
+                    val = float(price)
+                    return round(val / 10, 2) if val > 10 else round(val, 2)
                 return round(float(price), 2)
     except Exception as e:
         print(f"Yield error {ticker}: {e}")
