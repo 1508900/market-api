@@ -1,201 +1,363 @@
-from flask import Flask, jsonify
-from flask_cors import CORS
-import requests, datetime
+/* ============================================================
+   MAIN.JS — Application Controller
+   ============================================================ */
 
-app = Flask(__name__)
-CORS(app)
+let selectedIndex = 'sp500';
+let equityPeriod = '1W';
+let selectedCurveCountry = 'US';
+let refreshTimer = null;
 
-MARKET_TICKERS = [
-    "^GSPC", "^IXIC", "^STOXX50E", "ACWI", "EEM", "ILF", "MCHI", "EWY",
-    "EURUSD=X", "DX-Y.NYB", "EURJPY=X", "EURGBP=X", "USDJPY=X",
-    "TTF=F", "BZ=F", "CL=F", "GC=F", "SI=F", "HG=F", "ALI=F", "NI=F", "ZNC=F",
-    "^VIX", "OVS.EX"
-]
+// ---- NAVIGATION ----
+function showSection(name) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(`section-${name}`)?.classList.add('active');
+  event?.target?.classList.add('active');
 
-HOLDING_TICKERS = [
-    "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "BRK-B", "TSLA", "AVGO",
-    "ASML", "SAP", "TSM", "BABA", "TCEHY", "PDD", "JD", "BIDU",
-    "VALE", "PBR", "ITUB", "AMX", "FMX", "BBD", "INFY", "HDB",
-]
-
-# Yahoo Finance tickers for government bond yields
-YIELD_TICKERS = {
-    'US': {
-        'y1':  'DTB1YR=F',   # US 1Y Treasury
-        'y2':  '^IRX',        # US 13W (proxy)
-        'y5':  '^FVX',        # US 5Y Treasury
-        'y10': '^TNX',        # US 10Y Treasury
-        'y30': '^TYX',        # US 30Y Treasury
-    },
-    'DE': {
-        'y1':  'GDBR1Y=X',
-        'y2':  'GDBR2Y=X',
-        'y5':  'GDBR5Y=X',
-        'y10': 'GDBR10Y=X',
-        'y30': 'GDBR30Y=X',
-    },
-    'FR': {
-        'y2':  'FRTR2Y=X',
-        'y5':  'FRTR5Y=X',
-        'y10': 'FRTR10Y=X',
-        'y30': 'FRTR30Y=X',
-    },
-    'ES': {
-        'y2':  'ESPTS2Y=X',
-        'y5':  'ESPTS5Y=X',
-        'y10': 'ESPTS10Y=X',
-        'y30': 'ESPTS30Y=X',
-    },
-    'IT': {
-        'y2':  'ITBTPS2Y=X',
-        'y5':  'ITBTPS5Y=X',
-        'y10': 'ITBTPS10Y=X',
-        'y30': 'ITBTPS30Y=X',
-    },
-    'UK': {
-        'y2':  'GBGB2YR=X',
-        'y5':  'GBGB5YR=X',
-        'y10': 'GBGB10YR=X',
-        'y30': 'GBGB30YR=X',
-    },
-    'JP': {
-        'y2':  'JPGB2YR=X',
-        'y5':  'JPGB5YR=X',
-        'y10': 'JPGB10YR=X',
-        'y30': 'JPGB30YR=X',
-    },
+  // Lazy render section content
+  switch (name) {
+    case 'fixed':
+      renderYieldTable();
+      renderSlopeChart();
+      renderCurveChart(selectedCurveCountry);
+      break;
+    case 'credit':
+      renderCreditCards();
+      renderCreditCharts();
+      break;
+    case 'forex':
+      renderForexCards();
+      renderForexCharts();
+      break;
+    case 'commodities':
+      renderCommodityCards();
+      renderCommodityCharts();
+      break;
+    case 'correlations':
+      setTimeout(function(){ renderCorrelations(); }, 100);
+      break;
+    case 'volatility':
+      if (window.marketData && window.marketData.volatility) {
+        renderVolatility();
+      } else {
+        setTimeout(function(){ renderVolatility(); }, 500);
+      }
+      break;
+    case 'sentiment':
+      renderSentiment();
+      break;
+    case 'news':
+      loadNews();
+      break;
+  }
 }
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept": "application/json",
+// ---- PERIOD SELECTOR ----
+function setEquityPeriod(period, btn) {
+  equityPeriod = period;
+  window.marketData.equityPeriod = period;
+  document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  renderIndexCards();
+  renderIndexChart(selectedIndex, period);
 }
 
-def fetch_quote(ticker, range_="3mo"):
-    try:
-        url = "https://query1.finance.yahoo.com/v8/finance/chart/" + requests.utils.quote(ticker) + "?interval=1d&range=" + range_
-        r = requests.get(url, headers=HEADERS, timeout=10)
-        data = r.json()
-        result = data.get("chart", {}).get("result", [])
-        if not result:
-            return None
-        meta = result[0].get("meta", {})
-        timestamps = result[0].get("timestamp", [])
-        closes_raw = result[0].get("indicators", {}).get("quote", [{}])[0].get("close", [])
+// ---- TICKER BAR ----
+function updateTickerBar() {
+  const indices = window.marketData.indices;
+  const forex = window.marketData.forex;
+  const comms = window.marketData.commodities;
 
-        price = meta.get("regularMarketPrice")
-        prev  = meta.get("chartPreviousClose") or meta.get("regularMarketPreviousClose")
-        if not price:
-            return None
+  const items = [];
 
-        dates  = [str(datetime.date.fromtimestamp(t)) for t in timestamps]
-        closes = [round(float(c), 4) if c else None for c in closes_raw]
-        pairs  = [(d, c) for d, c in zip(dates, closes) if c is not None]
-        dates  = [p[0] for p in pairs]
-        closes = [p[1] for p in pairs]
+  Object.values(indices).forEach(idx => {
+    if (!idx.price) return;
+    const chg = idx.change || 0;
+    const cls = chg >= 0 ? 't-pos' : 't-neg';
+    const sign = chg >= 0 ? '▲' : '▼';
+    items.push(`<span class="ticker-item"><span class="t-name">${idx.name}</span> ${fmt(idx.price)} <span class="${cls}">${sign} ${Math.abs(chg).toFixed(2)}%</span></span>`);
+  });
 
-        change = round((price - prev) / prev * 100, 2) if prev else 0
+  Object.values(forex).forEach(pair => {
+    if (!pair.rate) return;
+    const chg = pair.change || 0;
+    const cls = chg >= 0 ? 't-pos' : 't-neg';
+    items.push(`<span class="ticker-item"><span class="t-name">${pair.name}</span> ${pair.rate.toFixed(4)} <span class="${cls}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span></span>`);
+  });
 
-        ytd_change = None
-        for i, d in enumerate(dates):
-            if d >= "2026-01-01":
-                first_2026 = closes[i]
-                ytd_change = round((price - first_2026) / first_2026 * 100, 2)
-                break
+  Object.values(comms).flat().forEach(c => {
+    if (!c.price) return;
+    const chg = c.change || 0;
+    const cls = chg >= 0 ? 't-pos' : 't-neg';
+    items.push(`<span class="ticker-item"><span class="t-name">${c.name}</span> ${fmt(c.price)} <span class="${cls}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span></span>`);
+  });
 
-        # Dividend yield
-        div_yield = None
-        try:
-            info = requests.get(
-                "https://query1.finance.yahoo.com/v8/finance/chart/" + requests.utils.quote(ticker) + "?modules=summaryDetail",
-                headers=HEADERS, timeout=6
-            ).json()
-            div_yield = info.get("quoteSummary", {}).get("result", [{}])[0].get("summaryDetail", {}).get("dividendYield", {}).get("raw")
-            if div_yield:
-                div_yield = round(float(div_yield) * 100, 2)
-        except:
-            pass
+  if (items.length === 0) return;
 
-        return {
-            "ticker":    ticker,
-            "price":     round(float(price), 4),
-            "prevClose": round(float(prev), 4) if prev else None,
-            "change":    change,
-            "ytd":       ytd_change,
-            "divYield":  div_yield,
-            "high52":    round(float(meta.get("fiftyTwoWeekHigh", price)), 4),
-            "low52":     round(float(meta.get("fiftyTwoWeekLow",  price)), 4),
-            "dates":     dates,
-            "closes":    closes,
-        }
-    except Exception as e:
-        print("Error " + ticker + ": " + str(e))
-        return None
+  // Duplicate for seamless loop
+  const content = [...items, ...items].join('');
+  document.getElementById('ticker-content').innerHTML = content;
+}
 
-def fetch_yield_value(ticker):
-    """Fetch just the current yield value for a bond ticker."""
-    try:
-        url = "https://query1.finance.yahoo.com/v8/finance/chart/" + requests.utils.quote(ticker) + "?interval=1d&range=5d"
-        r = requests.get(url, headers=HEADERS, timeout=8)
-        data = r.json()
-        result = data.get("chart", {}).get("result", [])
-        if result:
-            price = result[0].get("meta", {}).get("regularMarketPrice")
-            if price:
-                # TNX, FVX, TYX are in tenths of percent
-                if ticker in ['^TNX', '^TYX', '^FVX', '^IRX']:
-                    return round(float(price) / 10, 2) if float(price) > 10 else round(float(price), 2)
-                return round(float(price), 2)
-    except Exception as e:
-        print(f"Yield error {ticker}: {e}")
-    return None
+// ---- INDEX CARDS ----
+function getPeriodPerf(idx, period) {
+  if (!idx.dates || !idx.closes || idx.closes.length < 2) return null;
+  
+  // For YTD use pre-calculated ytd from API
+  if (period === 'YTD' && idx.ytd != null) return idx.ytd;
+  
+  const filtered = filterByPeriod(idx.dates, idx.closes, period);
+  if (!filtered.closes || filtered.closes.length < 2) return null;
+  const first = filtered.closes[0];
+  const last = filtered.closes[filtered.closes.length - 1];
+  if (!first || !last) return null;
+  
+  // For 1Y warn if we don't have enough data
+  if (period === '1Y' && filtered.dates.length < 200) {
+    // Not enough data for 1Y, return null
+    return filtered.dates.length > 20 ? +((last - first) / first * 100).toFixed(2) : null;
+  }
+  
+  return +((last - first) / first * 100).toFixed(2);
+}
 
-@app.route("/")
-def index():
-    return jsonify({"status": "ok", "message": "Market API running"})
+function renderIndexCards() {
+  const container = document.getElementById('index-cards');
+  const indices = window.marketData.indices;
 
-@app.route("/api/all")
-def all_data():
-    result = {}
-    for ticker in MARKET_TICKERS:
-        data = fetch_quote(ticker)
-        if data:
-            result[ticker] = data
-    return jsonify(result)
+  container.innerHTML = Object.values(indices).map(idx => {
+    if (!idx.price) return '';
 
-@app.route("/api/holdings")
-def holdings():
-    result = {}
-    for ticker in HOLDING_TICKERS:
-        data = fetch_quote(ticker, range_="1mo")
-        if data:
-            result[ticker] = {
-                "ticker":  data["ticker"],
-                "price":   data["price"],
-                "change":  data["change"],
-                "ytd":     data["ytd"],
-            }
-    return jsonify(result)
+    // Period performance
+    const periodPerf = getPeriodPerf(idx, equityPeriod);
+    const perfCls = periodPerf != null ? (periodPerf >= 0 ? 'pos' : 'neg') : 'neutral';
+    const perfSign = periodPerf != null ? (periodPerf >= 0 ? '▲' : '▼') : '';
+    const perfLabel = periodPerf != null ? `${perfSign} ${Math.abs(periodPerf).toFixed(2)}% (${equityPeriod})` : `${equityPeriod}: —`;
 
-@app.route("/api/yields")
-def yields():
-    result = {}
-    for country, tickers in YIELD_TICKERS.items():
-        country_data = {}
-        for tenor, ticker in tickers.items():
-            val = fetch_yield_value(ticker)
-            if val and 0 < val < 20:  # sanity check
-                country_data[tenor] = val
-        if country_data:
-            result[country] = country_data
-    return jsonify(result)
+    let barWidth = 50;
+    if (idx.high52 && idx.low52) {
+      const range = idx.high52 - idx.low52;
+      barWidth = range > 0 ? Math.min(100, Math.max(0, (idx.price - idx.low52) / range * 100)) : 50;
+    }
 
-@app.route("/api/quote/<path:ticker>")
-def quote(ticker):
-    data = fetch_quote(ticker)
-    if data:
-        return jsonify(data)
-    return jsonify({"error": "not found"}), 404
+    return `<div class="index-card ${perfCls} ${idx.id === selectedIndex ? 'selected' : ''}" onclick="selectIndex('${idx.id}')">
+      <div class="ic-ticker">${idx.ticker} · ${idx.region}</div>
+      <div class="ic-name">${idx.name}</div>
+      <div class="ic-price">${fmt(idx.price)}</div>
+      <div class="ic-change ${perfCls}">${perfLabel}</div>
+      <div class="ic-per">PER Fw: ${idx.per}x</div>
+      <div class="ic-bar"><div class="ic-bar-fill" style="width:${barWidth.toFixed(0)}%; background: ${(periodPerf||0) >= 0 ? 'var(--green)' : 'var(--red)'}"></div></div>
+    </div>`;
+  }).join('');
+}
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+// ---- SELECT INDEX ----
+async function selectIndex(id) {
+  selectedIndex = id;
+
+  // Update card selection
+  document.querySelectorAll('.index-card').forEach(c => {
+    c.classList.remove('selected');
+    if (c.getAttribute('onclick') && c.getAttribute('onclick').includes("'" + id + "'")) {
+      c.classList.add('selected');
+    }
+  });
+
+  const idx = window.marketData.indices[id];
+  if (!idx) return;
+
+  // Update detail panel header
+  document.getElementById('detail-name').textContent = idx.name;
+  document.getElementById('detail-exchange').textContent = idx.exchange;
+  document.getElementById('detail-price').textContent = fmt(idx.price);
+
+  const chg = idx.change || 0;
+  const changeEl = document.getElementById('detail-change');
+  const ytdVal = idx.ytd;
+  changeEl.textContent = ytdVal != null ? (ytdVal >= 0 ? '+' : '') + ytdVal.toFixed(2) + '%' : '—';
+  changeEl.className = 'metric-val ' + (ytdVal != null ? (ytdVal >= 0 ? 'pos' : 'neg') : '');
+
+  document.getElementById('detail-per').textContent = `${idx.per}x`;
+  document.getElementById('detail-high').textContent = fmt(idx.high52);
+  document.getElementById('detail-low').textContent = fmt(idx.low52);
+  document.getElementById('detail-yield').textContent = `${idx.yield}%`;
+
+  // Chart
+  renderIndexChart(id, equityPeriod);
+
+  // Holdings
+  document.getElementById('holdings-list').innerHTML = '<div class="loading"><div class="pulse"></div>Cargando holdings...</div>';
+
+  let holdingsData = window.marketData.holdings[id];
+  if (!holdingsData) {
+    holdingsData = await fetchHoldings(id);
+    window.marketData.holdings[id] = holdingsData;
+  }
+
+  const maxWeight = Math.max(...holdingsData.map(h => h.weight));
+  document.getElementById('holdings-list').innerHTML = holdingsData.map((h, i) => {
+    const ytd = h.ytd != null ? h.ytd : (h.change || 0);
+    const displayVal = ytd;
+    const displayLabel = `YTD: ${ytd >= 0 ? '+' : ''}${ytd.toFixed(2)}%`;
+    const barW = (h.weight / maxWeight * 100).toFixed(0);
+    return `
+      <div class="holding-item">
+        <span class="h-rank">#${i + 1}</span>
+        <span class="h-name">${h.name}<br><small style="color:var(--text3);font-size:10px">${h.ticker}</small></span>
+        <span class="h-weight">${h.weight.toFixed(1)}%</span>
+        <span class="h-change ${changeClass(displayVal)}">${displayLabel}</span>
+      </div>
+      <div class="h-bar-wrap"><div></div><div class="h-bar-bg"><div class="h-bar-fill" style="width:${barW}%"></div></div><div></div><div></div></div>
+    `;
+  }).join('');
+}
+
+// ---- YIELD TABLE ----
+function renderYieldTable() {
+  const yields = window.marketData.yields;
+  const tbody = document.getElementById('yield-tbody');
+  tbody.innerHTML = Object.entries(yields).map(([code, y]) => {
+    const slope = (y.y10 - y.y2).toFixed(2);
+    const slopeCls = +slope > 0.1 ? 'slope-pos' : +slope < -0.1 ? 'slope-neg' : 'slope-flat';
+    return `<tr>
+      <td><span class="td-flag">${y.flag}</span>${y.name}</td>
+      <td>${y.y1.toFixed(2)}%</td>
+      <td>${y.y2.toFixed(2)}%</td>
+      <td>${y.y5.toFixed(2)}%</td>
+      <td>${y.y10.toFixed(2)}%</td>
+      <td>${y.y30.toFixed(2)}%</td>
+      <td><span class="${slopeCls}">${slope > 0 ? '+' : ''}${slope}%</span></td>
+    </tr>`;
+  }).join('');
+
+  // Render curve country tabs
+  const tabsEl = document.getElementById('curve-country-tabs');
+  tabsEl.innerHTML = Object.entries(yields).map(([code, y]) =>
+    `<button class="curve-tab ${code === selectedCurveCountry ? 'active' : ''}" onclick="selectCurveCountry('${code}', this)">${y.flag} ${y.name}</button>`
+  ).join('');
+}
+
+function selectCurveCountry(code, btn) {
+  selectedCurveCountry = code;
+  document.querySelectorAll('.curve-tab').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  renderCurveChart(code);
+}
+
+// ---- CREDIT CARDS ----
+function renderCreditCards() {
+  const container = document.getElementById('credit-cards');
+  container.innerHTML = window.marketData.credit.map(c => {
+    const chg = c.change || 0;
+    const cls = chg > 0 ? 'neg' : 'pos'; // wider spread = negative for market
+    return `<div class="credit-card">
+      <div class="cc-region">${c.region}</div>
+      <div class="cc-type">${c.type}</div>
+      <div class="cc-spread">${c.spread} <small style="font-size:14px;color:var(--text3)">pb</small></div>
+      <div class="cc-change ${cls}">${chg >= 0 ? '+' : ''}${chg} pb hoy</div>
+    </div>`;
+  }).join('');
+}
+
+// ---- FOREX CARDS ----
+function renderForexCards() {
+  const container = document.getElementById('forex-cards');
+  container.innerHTML = Object.values(window.marketData.forex).map(pair => {
+    const decimals = pair.id === 'dxy' ? 2 : 4;
+    const ytd = pair.ytd != null ? pair.ytd : pair.change || 0;
+    const ytdCls = changeClass(ytd);
+    const ytdLabel = `YTD: ${ytd >= 0 ? '+' : ''}${ytd.toFixed(2)}%`;
+    return `<div class="forex-card">
+      <div class="fx-pair">${pair.name}</div>
+      <div class="fx-rate">${pair.rate?.toFixed(decimals) || '—'}</div>
+      <div class="fx-change ${ytdCls}">${ytdLabel}</div>
+      <div class="fx-meta">${pair.base} / ${pair.quote}</div>
+    </div>`;
+  }).join('');
+}
+
+// ---- COMMODITY CARDS ----
+function renderCommodityCards() {
+  function makeCards(items, containerId) {
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    el.innerHTML = items.map(c => {
+      const ytd = c.ytd != null ? c.ytd : (c.change || 0);
+      const cls = changeClass(ytd);
+      const ytdLabel = `YTD: ${ytd >= 0 ? '+' : ''}${ytd.toFixed(2)}%`;
+      return `<div class="comm-card">
+        <div>
+          <div class="comm-name">${c.name}</div>
+          <div class="comm-unit">${c.unit}</div>
+        </div>
+        <div>
+          <div class="comm-price">${fmt(c.price)}</div>
+          <div class="comm-change ${cls}">${ytdLabel}</div>
+        </div>
+      </div>`;
+    }).join('');
+  }
+  makeCards(window.marketData.commodities.energy || [], 'energy-cards');
+  makeCards(window.marketData.commodities.precious || [], 'precious-cards');
+  makeCards(window.marketData.commodities.industrial || [], 'industrial-cards');
+}
+
+// ---- REFRESH ----
+async function refreshAll() {
+  const btn = document.querySelector('.refresh-btn');
+  btn.textContent = '↻ Cargando...';
+  btn.disabled = true;
+
+  try {
+    await loadAllData();
+
+    // Re-render all active content
+    renderIndexCards();
+    updateTickerBar();
+    await selectIndex(selectedIndex);
+
+    // Refresh current section
+    const activeSection = document.querySelector('.section.active')?.id?.replace('section-', '');
+    if (activeSection) showSection(activeSection);
+
+  } finally {
+    btn.textContent = '↻ Actualizar';
+    btn.disabled = false;
+  }
+}
+
+// ---- INIT ----
+async function init() {
+  // Load data
+  await loadAllData();
+
+  // Render equity section (default)
+  renderIndexCards();
+  updateTickerBar();
+
+  // Select first index
+  const firstId = Object.keys(window.marketData.indices)[0] || 'sp500';
+  await selectIndex(firstId);
+
+  // Load news in background
+  loadNews();
+
+  // Pre-render correlations and volatility data
+  setTimeout(function(){ 
+    if (typeof renderCorrelations === 'function') renderCorrelations();
+    if (typeof renderVolatility === 'function') renderVolatility();
+  }, 2000);
+
+  // Auto-refresh every 5 minutes
+  refreshTimer = setInterval(() => {
+    loadAllData().then(() => {
+      renderIndexCards();
+      updateTickerBar();
+      const activeSection = document.querySelector('.section.active')?.id?.replace('section-', '');
+      if (activeSection && activeSection !== 'equities') showSection(activeSection);
+    });
+  }, 5 * 60 * 1000);
+}
+
+// Start app
+document.addEventListener('DOMContentLoaded', init);
