@@ -367,6 +367,121 @@ def fetch_fred_series(series_id, limit=500):
 @app.route("/api/credit")
 def credit():
     result = {}
+
+    # EEUU IG: ICE BofA US Corporate OAS (official FRED)
+    dates, vals = fetch_fred_series('BAMLC0A0CM', limit=600)
+    if vals:
+        current, prev = vals[-1], vals[-2] if len(vals)>1 else vals[-1]
+        result['us_ig'] = {
+            'id': 'us_ig', 'name': 'Investment Grade', 'region': 'EEUU', 'type': 'ig',
+            'spread': int(round(current*100)), 'change': int(round((current-prev)*100)),
+            'dates': dates, 'values': [round(v*100,1) for v in vals],
+            'source': 'ICE BofA / FRED'
+        }
+
+    # EEUU HY: ICE BofA US High Yield OAS (official FRED)
+    dates, vals = fetch_fred_series('BAMLH0A0HYM2', limit=600)
+    if vals:
+        current, prev = vals[-1], vals[-2] if len(vals)>1 else vals[-1]
+        result['us_hy'] = {
+            'id': 'us_hy', 'name': 'High Yield', 'region': 'EEUU', 'type': 'hy',
+            'spread': int(round(current*100)), 'change': int(round((current-prev)*100)),
+            'dates': dates, 'values': [round(v*100,1) for v in vals],
+            'source': 'ICE BofA / FRED'
+        }
+
+    # Europa HY: ICE BofA Euro High Yield OAS (official FRED)
+    dates, vals = fetch_fred_series('BAMLHE00EHY0EY', limit=600)
+    if vals:
+        current, prev = vals[-1], vals[-2] if len(vals)>1 else vals[-1]
+        result['eu_hy'] = {
+            'id': 'eu_hy', 'name': 'High Yield', 'region': 'Europa', 'type': 'hy',
+            'spread': int(round(current*100)), 'change': int(round((current-prev)*100)),
+            'dates': dates, 'values': [round(v*100,1) for v in vals],
+            'source': 'ICE BofA / FRED'
+        }
+
+    return jsonify(result)
+
+@app.route("/api/news")
+def news():
+    all_articles = []
+    try:
+        for query in NEWS_QUERIES:
+            url = "https://newsapi.org/v2/everything"
+            params = {
+                'q': query['q'],
+                'language': 'en',
+                'sortBy': 'publishedAt',
+                'pageSize': 4,
+                'apiKey': NEWS_API_KEY,
+            }
+            r = requests.get(url, params=params, headers=HEADERS, timeout=8)
+            data = r.json()
+            if data.get('status') == 'ok':
+                for a in data.get('articles', []):
+                    if a.get('title') and a['title'] != '[Removed]' and a.get('url'):
+                        all_articles.append({
+                            'title': a['title'],
+                            'summary': (a.get('description') or '')[:200],
+                            'category': query['category'],
+                            'source': a.get('source', {}).get('name', 'News'),
+                            'publishedAt': a.get('publishedAt', ''),
+                            'url': a['url'],
+                        })
+    except Exception as e:
+        print(f"News error: {e}")
+    
+    # Sort by date
+    all_articles.sort(key=lambda x: x.get('publishedAt', ''), reverse=True)
+    return jsonify(all_articles[:30])
+
+# ICE BofA Credit Spread Series (FRED)
+FRED_CREDIT_SERIES = {
+    'us_ig':  'BAMLC0A0CM',      # US IG OAS spread
+    'us_hy':  'BAMLH0A0HYM2',    # US HY OAS spread
+    'eu_ig':  'BAMLHE00EHY0EY',  # EU HY spread (proxy for IG)
+    'eu_hy':  'BAMLHE00EHY0EY',  # EU HY OAS spread
+}
+
+# More specific series
+FRED_CREDIT_FULL = {
+    'us_ig':  {'series': 'BAMLC0A0CM',       'name': 'EEUU Investment Grade',  'region': 'EEUU'},
+    'us_hy':  {'series': 'BAMLH0A0HYM2',     'name': 'EEUU High Yield',        'region': 'EEUU'},
+    'eu_ig':  {'series': 'BAMLHE00EHY0EY',   'name': 'Europa Investment Grade', 'region': 'Europa'},
+    'eu_hy':  {'series': 'BAMLHE00EHY0EY',   'name': 'Europa High Yield',       'region': 'Europa'},
+}
+
+def fetch_fred_series(series_id, limit=500):
+    """Fetch historical daily series from FRED."""
+    try:
+        url = "https://api.stlouisfed.org/fred/series/observations"
+        params = {
+            'series_id': series_id,
+            'api_key': FRED_API_KEY,
+            'file_type': 'json',
+            'sort_order': 'desc',
+            'limit': limit,
+            'observation_start': '2023-01-01',
+            'frequency': 'd',  # daily frequency
+        }
+        r = requests.get(url, params=params, headers=HEADERS, timeout=15)
+        data = r.json()
+        obs = data.get('observations', [])
+        dates = []
+        values = []
+        for o in reversed(obs):
+            if o.get('value') and o['value'] != '.':
+                dates.append(o['date'])
+                values.append(round(float(o['value']), 3))
+        return dates, values
+    except Exception as e:
+        print(f"FRED series error {series_id}: {e}")
+        return [], []
+
+@app.route("/api/credit")
+def credit():
+    result = {}
     seen_series = {}
     
     # ICE BofA series - all from FRED
