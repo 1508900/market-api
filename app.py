@@ -337,8 +337,8 @@ FRED_CREDIT_FULL = {
     'eu_hy':  {'series': 'BAMLHE00EHY0EY',   'name': 'Europa High Yield',       'region': 'Europa'},
 }
 
-def fetch_fred_series(series_id, limit=250):
-    """Fetch historical series from FRED."""
+def fetch_fred_series(series_id, limit=500):
+    """Fetch historical daily series from FRED."""
     try:
         url = "https://api.stlouisfed.org/fred/series/observations"
         params = {
@@ -347,7 +347,8 @@ def fetch_fred_series(series_id, limit=250):
             'file_type': 'json',
             'sort_order': 'desc',
             'limit': limit,
-            'observation_start': '2020-01-01',
+            'observation_start': '2023-01-01',
+            'frequency': 'd',  # daily frequency
         }
         r = requests.get(url, params=params, headers=HEADERS, timeout=15)
         data = r.json()
@@ -357,7 +358,7 @@ def fetch_fred_series(series_id, limit=250):
         for o in reversed(obs):
             if o.get('value') and o['value'] != '.':
                 dates.append(o['date'])
-                values.append(round(float(o['value']), 2))
+                values.append(round(float(o['value']), 3))
         return dates, values
     except Exception as e:
         print(f"FRED series error {series_id}: {e}")
