@@ -15,9 +15,56 @@ MARKET_TICKERS = [
 HOLDING_TICKERS = [
     "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "BRK-B", "TSLA", "AVGO",
     "ASML", "SAP", "TSM", "BABA", "TCEHY", "PDD", "JD", "BIDU",
-    "VALE", "PBR", "ITUB", "AMX", "FMX", "BBD",
-    "INFY", "HDB", "EWY"
+    "VALE", "PBR", "ITUB", "AMX", "FMX", "BBD", "INFY", "HDB",
 ]
+
+# Yahoo Finance tickers for government bond yields
+YIELD_TICKERS = {
+    'US': {
+        'y1':  'DTB1YR=F',   # US 1Y Treasury
+        'y2':  '^IRX',        # US 13W (proxy)
+        'y5':  '^FVX',        # US 5Y Treasury
+        'y10': '^TNX',        # US 10Y Treasury
+        'y30': '^TYX',        # US 30Y Treasury
+    },
+    'DE': {
+        'y1':  'GDBR1Y=X',
+        'y2':  'GDBR2Y=X',
+        'y5':  'GDBR5Y=X',
+        'y10': 'GDBR10Y=X',
+        'y30': 'GDBR30Y=X',
+    },
+    'FR': {
+        'y2':  'FRTR2Y=X',
+        'y5':  'FRTR5Y=X',
+        'y10': 'FRTR10Y=X',
+        'y30': 'FRTR30Y=X',
+    },
+    'ES': {
+        'y2':  'ESPTS2Y=X',
+        'y5':  'ESPTS5Y=X',
+        'y10': 'ESPTS10Y=X',
+        'y30': 'ESPTS30Y=X',
+    },
+    'IT': {
+        'y2':  'ITBTPS2Y=X',
+        'y5':  'ITBTPS5Y=X',
+        'y10': 'ITBTPS10Y=X',
+        'y30': 'ITBTPS30Y=X',
+    },
+    'UK': {
+        'y2':  'GBGB2YR=X',
+        'y5':  'GBGB5YR=X',
+        'y10': 'GBGB10YR=X',
+        'y30': 'GBGB30YR=X',
+    },
+    'JP': {
+        'y2':  'JPGB2YR=X',
+        'y5':  'JPGB5YR=X',
+        'y10': 'JPGB10YR=X',
+        'y30': 'JPGB30YR=X',
+    },
+}
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -49,7 +96,6 @@ def fetch_quote(ticker, range_="3mo"):
 
         change = round((price - prev) / prev * 100, 2) if prev else 0
 
-        # YTD: find first close of 2026
         ytd_change = None
         for i, d in enumerate(dates):
             if d >= "2026-01-01":
@@ -86,6 +132,24 @@ def fetch_quote(ticker, range_="3mo"):
         print("Error " + ticker + ": " + str(e))
         return None
 
+def fetch_yield_value(ticker):
+    """Fetch just the current yield value for a bond ticker."""
+    try:
+        url = "https://query1.finance.yahoo.com/v8/finance/chart/" + requests.utils.quote(ticker) + "?interval=1d&range=5d"
+        r = requests.get(url, headers=HEADERS, timeout=8)
+        data = r.json()
+        result = data.get("chart", {}).get("result", [])
+        if result:
+            price = result[0].get("meta", {}).get("regularMarketPrice")
+            if price:
+                # TNX, FVX, TYX are in tenths of percent
+                if ticker in ['^TNX', '^TYX', '^FVX', '^IRX']:
+                    return round(float(price) / 10, 2) if float(price) > 10 else round(float(price), 2)
+                return round(float(price), 2)
+    except Exception as e:
+        print(f"Yield error {ticker}: {e}")
+    return None
+
 @app.route("/")
 def index():
     return jsonify({"status": "ok", "message": "Market API running"})
@@ -103,7 +167,7 @@ def all_data():
 def holdings():
     result = {}
     for ticker in HOLDING_TICKERS:
-        data = fetch_quote(ticker, range_="1y")
+        data = fetch_quote(ticker, range_="1mo")
         if data:
             result[ticker] = {
                 "ticker":  data["ticker"],
@@ -111,6 +175,19 @@ def holdings():
                 "change":  data["change"],
                 "ytd":     data["ytd"],
             }
+    return jsonify(result)
+
+@app.route("/api/yields")
+def yields():
+    result = {}
+    for country, tickers in YIELD_TICKERS.items():
+        country_data = {}
+        for tenor, ticker in tickers.items():
+            val = fetch_yield_value(ticker)
+            if val and 0 < val < 20:  # sanity check
+                country_data[tenor] = val
+        if country_data:
+            result[country] = country_data
     return jsonify(result)
 
 @app.route("/api/quote/<path:ticker>")
