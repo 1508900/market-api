@@ -190,7 +190,8 @@ def index():
 FIVE_YEAR_TICKERS = {
     "^GSPC", "^IXIC", "^STOXX50E", "ACWI", "EEM", "ILF", "MCHI", "EWY",
     "EURUSD=X", "DX-Y.NYB", "EURJPY=X", "EURGBP=X", "USDJPY=X",
-    "^VIX", "OVS.EX"
+    "^VIX", "OVS.EX",
+    "TTF=F", "BZ=F", "CL=F", "GC=F", "SI=F", "HG=F", "ALI=F", "NI=F", "ZNC=F"
 }
 
 @app.route("/api/all")
