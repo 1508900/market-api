@@ -34,6 +34,11 @@ FRED_US_SERIES = {
     'y30': 'DGS30',   # 30-Year Treasury Constant Maturity
 }
 
+# Fallback US yields from Yahoo if FRED fails
+YAHOO_US_YIELDS = {
+    'y2':  'ZT=F',    # 2Y Treasury futures
+}
+
 # ECB API series for European sovereign yields
 # Using ECB Statistical Data Warehouse
 ECB_SERIES = {
@@ -92,21 +97,25 @@ def fetch_fred(series_id):
 def fetch_ecb(series_id):
     """Fetch latest value from ECB API."""
     try:
-        url = f"https://data-api.ecb.europa.eu/service/data/{series_id}"
-        params = {'lastNObservations': 1, 'format': 'jsondata'}
-        r = requests.get(url, params=params, headers=HEADERS, timeout=10)
+        # ECB Data Portal API
+        url = f"https://data-api.ecb.europa.eu/service/data/{series_id}?lastNObservations=1&format=jsondata"
+        r = requests.get(url, headers={**HEADERS, 'Accept': 'application/json'}, timeout=10)
+        if r.status_code != 200:
+            return None
         data = r.json()
-        datasets = data.get('dataSets', [{}])
+        datasets = data.get('dataSets', [])
         if not datasets:
             return None
         series_data = datasets[0].get('series', {})
-        if series_data:
-            obs = list(series_data.values())[0].get('observations', {})
-            if obs:
-                latest = sorted(obs.keys(), key=int)[-1]
-                val = obs[latest][0]
-                if val is not None:
-                    return round(float(val), 2)
+        if not series_data:
+            return None
+        first_series = list(series_data.values())[0]
+        obs = first_series.get('observations', {})
+        if obs:
+            latest_key = sorted(obs.keys(), key=lambda x: int(x))[-1]
+            val = obs[latest_key][0]
+            if val is not None:
+                return round(float(val), 2)
     except Exception as e:
         print(f"ECB error {series_id}: {e}")
     return None
@@ -177,11 +186,19 @@ def fetch_quote(ticker, range_="1y"):
 def index():
     return jsonify({"status": "ok", "message": "Market API running"})
 
+# Tickers that get 5 years of history
+FIVE_YEAR_TICKERS = {
+    "^GSPC", "^IXIC", "^STOXX50E", "ACWI", "EEM", "ILF", "MCHI", "EWY",
+    "EURUSD=X", "DX-Y.NYB", "EURJPY=X", "EURGBP=X", "USDJPY=X",
+    "^VIX", "OVS.EX"
+}
+
 @app.route("/api/all")
 def all_data():
     result = {}
     for ticker in MARKET_TICKERS:
-        data = fetch_quote(ticker, range_="1y")
+        range_ = "5y" if ticker in FIVE_YEAR_TICKERS else "2y"
+        data = fetch_quote(ticker, range_=range_)
         if data:
             result[ticker] = data
     return jsonify(result)
@@ -190,7 +207,7 @@ def all_data():
 def holdings():
     result = {}
     for ticker in HOLDING_TICKERS:
-        data = fetch_quote(ticker, range_="1y")
+        data = fetch_quote(ticker, range_="2y")
         if data:
             result[ticker] = {
                 "ticker": data["ticker"],
@@ -210,6 +227,13 @@ def yields():
         val = fetch_fred(series)
         if val and 0 < val < 20:
             us[tenor] = val
+    # Fallback for missing tenors
+    if 'y2' not in us:
+        val = fetch_yahoo_yield('ZT=F')
+        if val and 0 < val < 20:
+            # ZT=F is price not yield, skip; use interpolation
+            if 'y1' in us and 'y5' in us:
+                us['y2'] = round((us['y1'] + us['y5']) / 2, 2)
     if us:
         result['US'] = us
         print(f"US yields from FRED: {us}")
@@ -252,6 +276,50 @@ def quote(ticker):
     if data:
         return jsonify(data)
     return jsonify({"error": "not found"}), 404
+
+NEWS_API_KEY = 'd4176b33a2c44707b2c4376667a7a1ae'
+
+NEWS_QUERIES = [
+    {'q': 'stock market S&P 500 earnings', 'category': 'equities'},
+    {'q': 'Federal Reserve interest rates inflation', 'category': 'rates'},
+    {'q': 'ECB European Central Bank eurozone economy', 'category': 'rates'},
+    {'q': 'credit spreads high yield corporate bonds', 'category': 'credit'},
+    {'q': 'oil gold commodities energy metals', 'category': 'commodities'},
+    {'q': 'GDP inflation macro economy trade', 'category': 'macro'},
+]
+
+@app.route("/api/news")
+def news():
+    all_articles = []
+    try:
+        for query in NEWS_QUERIES:
+            url = "https://newsapi.org/v2/everything"
+            params = {
+                'q': query['q'],
+                'language': 'en',
+                'sortBy': 'publishedAt',
+                'pageSize': 4,
+                'apiKey': NEWS_API_KEY,
+            }
+            r = requests.get(url, params=params, headers=HEADERS, timeout=8)
+            data = r.json()
+            if data.get('status') == 'ok':
+                for a in data.get('articles', []):
+                    if a.get('title') and a['title'] != '[Removed]' and a.get('url'):
+                        all_articles.append({
+                            'title': a['title'],
+                            'summary': (a.get('description') or '')[:200],
+                            'category': query['category'],
+                            'source': a.get('source', {}).get('name', 'News'),
+                            'publishedAt': a.get('publishedAt', ''),
+                            'url': a['url'],
+                        })
+    except Exception as e:
+        print(f"News error: {e}")
+    
+    # Sort by date
+    all_articles.sort(key=lambda x: x.get('publishedAt', ''), reverse=True)
+    return jsonify(all_articles[:30])
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
