@@ -5,6 +5,8 @@ import requests, datetime
 app = Flask(__name__)
 CORS(app)
 
+FRED_API_KEY = 'e1d62698562dd0ded5a7cada4ddd11c3'
+
 MARKET_TICKERS = [
     "^GSPC", "^IXIC", "^STOXX50E", "ACWI", "EEM", "ILF", "MCHI", "EWY",
     "EURUSD=X", "DX-Y.NYB", "EURJPY=X", "EURGBP=X", "USDJPY=X",
@@ -18,40 +20,41 @@ HOLDING_TICKERS = [
     "VALE", "PBR", "ITUB", "AMX", "FMX", "BBD", "INFY", "HDB",
 ]
 
-# Yahoo Finance tickers for government bond yields
-YIELD_TICKERS = {
-    'US': {
-        'y1':  '^IRX',        # US 13W Bill (best proxy for 1Y)
-        'y2':  'ZT=F',        # US 2Y Treasury futures
-        'y5':  '^FVX',        # US 5Y Treasury
-        'y10': '^TNX',        # US 10Y Treasury
-        'y30': '^TYX',        # US 30Y Treasury
-    },
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "application/json",
+}
+
+# FRED series for US Treasury yields (official Fed data)
+FRED_US_SERIES = {
+    'y1':  'DGS1',    # 1-Year Treasury Constant Maturity
+    'y2':  'DGS2',    # 2-Year Treasury Constant Maturity
+    'y5':  'DGS5',    # 5-Year Treasury Constant Maturity
+    'y10': 'DGS10',   # 10-Year Treasury Constant Maturity
+    'y30': 'DGS30',   # 30-Year Treasury Constant Maturity
+}
+
+# ECB API series for European sovereign yields
+# Using ECB Statistical Data Warehouse
+ECB_SERIES = {
     'DE': {
-        'y1':  'GDBR1Y=X',
-        'y2':  'GDBR2Y=X',
-        'y5':  'GDBR5Y=X',
-        'y10': 'GDBR10Y=X',
-        'y30': 'GDBR30Y=X',
+        'y1':  'YC/B.U2.EUR.4F.G_N_A.SV_C_YM.SR_1Y',
+        'y2':  'YC/B.U2.EUR.4F.G_N_A.SV_C_YM.SR_2Y',
+        'y5':  'YC/B.U2.EUR.4F.G_N_A.SV_C_YM.SR_5Y',
+        'y10': 'YC/B.U2.EUR.4F.G_N_A.SV_C_YM.SR_10Y',
+        'y30': 'YC/B.U2.EUR.4F.G_N_A.SV_C_YM.SR_30Y',
     },
-    'FR': {
-        'y2':  'FRTR2Y=X',
-        'y5':  'FRTR5Y=X',
-        'y10': 'FRTR10Y=X',
-        'y30': 'FRTR30Y=X',
-    },
-    'ES': {
-        'y2':  'ESPTS2Y=X',
-        'y5':  'ESPTS5Y=X',
-        'y10': 'ESPTS10Y=X',
-        'y30': 'ESPTS30Y=X',
-    },
-    'IT': {
-        'y2':  'ITBTPS2Y=X',
-        'y5':  'ITBTPS5Y=X',
-        'y10': 'ITBTPS10Y=X',
-        'y30': 'ITBTPS30Y=X',
-    },
+}
+
+# For non-ECB EUR countries, use spread over Germany (approximate)
+SPREAD_OVER_DE = {
+    'FR': {'y1': 0.25, 'y2': 0.35, 'y5': 0.45, 'y10': 0.55, 'y30': 0.60},
+    'ES': {'y1': 0.30, 'y2': 0.40, 'y5': 0.55, 'y10': 0.70, 'y30': 0.75},
+    'IT': {'y1': 0.55, 'y2': 0.65, 'y5': 0.80, 'y10': 1.05, 'y30': 1.15},
+}
+
+# Yahoo Finance tickers for UK and Japan
+YAHOO_YIELDS = {
     'UK': {
         'y2':  'GBGB2YR=X',
         'y5':  'GBGB5YR=X',
@@ -66,12 +69,64 @@ YIELD_TICKERS = {
     },
 }
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept": "application/json",
-}
+def fetch_fred(series_id):
+    """Fetch latest value from FRED API."""
+    try:
+        url = f"https://api.stlouisfed.org/fred/series/observations"
+        params = {
+            'series_id': series_id,
+            'api_key': FRED_API_KEY,
+            'file_type': 'json',
+            'sort_order': 'desc',
+            'limit': 5,
+        }
+        r = requests.get(url, params=params, headers=HEADERS, timeout=10)
+        data = r.json()
+        for obs in data.get('observations', []):
+            if obs.get('value') and obs['value'] != '.':
+                return round(float(obs['value']), 2)
+    except Exception as e:
+        print(f"FRED error {series_id}: {e}")
+    return None
 
-def fetch_quote(ticker, range_="3mo"):
+def fetch_ecb(series_id):
+    """Fetch latest value from ECB API."""
+    try:
+        url = f"https://data-api.ecb.europa.eu/service/data/{series_id}"
+        params = {'lastNObservations': 1, 'format': 'jsondata'}
+        r = requests.get(url, params=params, headers=HEADERS, timeout=10)
+        data = r.json()
+        datasets = data.get('dataSets', [{}])
+        if not datasets:
+            return None
+        series_data = datasets[0].get('series', {})
+        if series_data:
+            obs = list(series_data.values())[0].get('observations', {})
+            if obs:
+                latest = sorted(obs.keys(), key=int)[-1]
+                val = obs[latest][0]
+                if val is not None:
+                    return round(float(val), 2)
+    except Exception as e:
+        print(f"ECB error {series_id}: {e}")
+    return None
+
+def fetch_yahoo_yield(ticker):
+    """Fetch yield from Yahoo Finance."""
+    try:
+        url = "https://query1.finance.yahoo.com/v8/finance/chart/" + requests.utils.quote(ticker) + "?interval=1d&range=5d"
+        r = requests.get(url, headers=HEADERS, timeout=8)
+        data = r.json()
+        result = data.get("chart", {}).get("result", [])
+        if result:
+            price = result[0].get("meta", {}).get("regularMarketPrice")
+            if price:
+                return round(float(price), 2)
+    except Exception as e:
+        print(f"Yahoo yield error {ticker}: {e}")
+    return None
+
+def fetch_quote(ticker, range_="1y"):
     try:
         url = "https://query1.finance.yahoo.com/v8/finance/chart/" + requests.utils.quote(ticker) + "?interval=1d&range=" + range_
         r = requests.get(url, headers=HEADERS, timeout=10)
@@ -103,26 +158,12 @@ def fetch_quote(ticker, range_="3mo"):
                 ytd_change = round((price - first_2026) / first_2026 * 100, 2)
                 break
 
-        # Dividend yield
-        div_yield = None
-        try:
-            info = requests.get(
-                "https://query1.finance.yahoo.com/v8/finance/chart/" + requests.utils.quote(ticker) + "?modules=summaryDetail",
-                headers=HEADERS, timeout=6
-            ).json()
-            div_yield = info.get("quoteSummary", {}).get("result", [{}])[0].get("summaryDetail", {}).get("dividendYield", {}).get("raw")
-            if div_yield:
-                div_yield = round(float(div_yield) * 100, 2)
-        except:
-            pass
-
         return {
             "ticker":    ticker,
             "price":     round(float(price), 4),
             "prevClose": round(float(prev), 4) if prev else None,
             "change":    change,
             "ytd":       ytd_change,
-            "divYield":  div_yield,
             "high52":    round(float(meta.get("fiftyTwoWeekHigh", price)), 4),
             "low52":     round(float(meta.get("fiftyTwoWeekLow",  price)), 4),
             "dates":     dates,
@@ -131,28 +172,6 @@ def fetch_quote(ticker, range_="3mo"):
     except Exception as e:
         print("Error " + ticker + ": " + str(e))
         return None
-
-def fetch_yield_value(ticker):
-    """Fetch just the current yield value for a bond ticker."""
-    try:
-        url = "https://query1.finance.yahoo.com/v8/finance/chart/" + requests.utils.quote(ticker) + "?interval=1d&range=5d"
-        r = requests.get(url, headers=HEADERS, timeout=8)
-        data = r.json()
-        result = data.get("chart", {}).get("result", [])
-        if result:
-            price = result[0].get("meta", {}).get("regularMarketPrice")
-            if price:
-                # TNX, FVX, TYX are in tenths of percent
-                if ticker in ['^TNX', '^TYX', '^FVX']:
-                    return round(float(price) / 10, 2) if float(price) > 10 else round(float(price), 2)
-                if ticker == '^IRX':
-                    # IRX = 13-week T-Bill annualized, divide by 10 if > 10
-                    val = float(price)
-                    return round(val / 10, 2) if val > 10 else round(val, 2)
-                return round(float(price), 2)
-    except Exception as e:
-        print(f"Yield error {ticker}: {e}")
-    return None
 
 @app.route("/")
 def index():
@@ -171,27 +190,60 @@ def all_data():
 def holdings():
     result = {}
     for ticker in HOLDING_TICKERS:
-        data = fetch_quote(ticker, range_="1mo")
+        data = fetch_quote(ticker, range_="1y")
         if data:
             result[ticker] = {
-                "ticker":  data["ticker"],
-                "price":   data["price"],
-                "change":  data["change"],
-                "ytd":     data["ytd"],
+                "ticker": data["ticker"],
+                "price":  data["price"],
+                "change": data["change"],
+                "ytd":    data["ytd"],
             }
     return jsonify(result)
 
 @app.route("/api/yields")
 def yields():
     result = {}
-    for country, tickers in YIELD_TICKERS.items():
+
+    # 1. US yields from FRED (official Fed data)
+    us = {}
+    for tenor, series in FRED_US_SERIES.items():
+        val = fetch_fred(series)
+        if val and 0 < val < 20:
+            us[tenor] = val
+    if us:
+        result['US'] = us
+        print(f"US yields from FRED: {us}")
+
+    # 2. Germany from ECB (official ECB data)
+    de = {}
+    for tenor, series in ECB_SERIES['DE'].items():
+        val = fetch_ecb(series)
+        if val and -2 < val < 20:
+            de[tenor] = val
+    if de:
+        result['DE'] = de
+        print(f"DE yields from ECB: {de}")
+
+        # 3. FR, ES, IT derived from DE + spread
+        for country, spreads in SPREAD_OVER_DE.items():
+            country_data = {}
+            for tenor, spread in spreads.items():
+                if tenor in de:
+                    country_data[tenor] = round(de[tenor] + spread, 2)
+            if country_data:
+                result[country] = country_data
+
+    # 4. UK and Japan from Yahoo Finance
+    for country, tickers in YAHOO_YIELDS.items():
         country_data = {}
         for tenor, ticker in tickers.items():
-            val = fetch_yield_value(ticker)
-            if val and 0 < val < 20:  # sanity check
+            val = fetch_yahoo_yield(ticker)
+            if val and 0 < val < 20:
                 country_data[tenor] = val
         if country_data:
             result[country] = country_data
+            print(f"{country} yields from Yahoo: {country_data}")
+
     return jsonify(result)
 
 @app.route("/api/quote/<path:ticker>")
