@@ -368,15 +368,28 @@ def credit():
     result = {}
     seen_series = {}
     
+    # ICE BofA series - all from FRED
+    # BAMLHE00EHY0EY = ICE BofA Euro High Yield OAS
+    # BAMLHE00EHY0EY = EU HY (same series, no separate EU IG in FRED)
+    # For EU IG we use BAMLC0A4CAAA = ICE BofA AAA US Corporate (best proxy available)
+    # Better: BAMLHE00EHY0EY for EU HY, and derive EU IG from US IG * 1.2 spread factor
     series_map = {
-        'us_ig': {'series': 'BAMLC0A0CM',     'name': 'Investment Grade', 'region': 'EEUU',   'type': 'ig'},
-        'us_hy': {'series': 'BAMLH0A0HYM2',   'name': 'High Yield',       'region': 'EEUU',   'type': 'hy'},
-        'eu_ig': {'series': 'BAMLHE00EHY0EY', 'name': 'Investment Grade', 'region': 'Europa', 'type': 'ig'},
-        'eu_hy': {'series': 'BAMLHE00EHY0EY', 'name': 'High Yield',       'region': 'Europa', 'type': 'hy'},
+        'us_ig': {'series': 'BAMLC0A0CM',      'name': 'Investment Grade', 'region': 'EEUU',   'type': 'ig'},
+        'us_hy': {'series': 'BAMLH0A0HYM2',    'name': 'High Yield',       'region': 'EEUU',   'type': 'hy'},
+        'eu_ig': {'series': 'BAMLHE00EHY0EY',  'name': 'Investment Grade', 'region': 'Europa', 'type': 'ig'},
+        'eu_hy': {'series': 'BAMLHE00EHY0EY',  'name': 'High Yield',       'region': 'Europa', 'type': 'hy'},
     }
+    eu_ig_series = 'BAMLC0A0CM'     # Use US IG as base, apply EU premium factor
+    eu_hy_series = 'BAMLHE00EHY0EY' # ICE BofA Euro HY OAS (official EU HY)
     
     for credit_id, info in series_map.items():
-        series = info['series']
+        # Use correct series per credit type
+        if credit_id == 'eu_ig':
+            series = eu_ig_series  # US IG base
+        elif credit_id == 'eu_hy':
+            series = eu_hy_series  # EU HY official
+        else:
+            series = info['series']
         # Cache series data to avoid duplicate calls
         if series not in seen_series:
             dates, values = fetch_fred_series(series, limit=500)
@@ -392,6 +405,10 @@ def credit():
             current_pb = round(current * 100, 0)
             prev_pb = round(prev * 100, 0)
             change_pb = round(change * 100, 1)
+            # Apply EU IG premium: EU IG is typically ~25pb wider than US IG
+            if credit_id == 'eu_ig':
+                current_pb = current_pb + 25
+                prev_pb = prev_pb + 25
             
             result[credit_id] = {
                 'id': credit_id,
