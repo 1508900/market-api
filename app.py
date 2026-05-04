@@ -321,5 +321,90 @@ def news():
     all_articles.sort(key=lambda x: x.get('publishedAt', ''), reverse=True)
     return jsonify(all_articles[:30])
 
+# ICE BofA Credit Spread Series (FRED)
+FRED_CREDIT_SERIES = {
+    'us_ig':  'BAMLC0A0CM',      # US IG OAS spread
+    'us_hy':  'BAMLH0A0HYM2',    # US HY OAS spread
+    'eu_ig':  'BAMLHE00EHY0EY',  # EU HY spread (proxy for IG)
+    'eu_hy':  'BAMLHE00EHY0EY',  # EU HY OAS spread
+}
+
+# More specific series
+FRED_CREDIT_FULL = {
+    'us_ig':  {'series': 'BAMLC0A0CM',       'name': 'EEUU Investment Grade',  'region': 'EEUU'},
+    'us_hy':  {'series': 'BAMLH0A0HYM2',     'name': 'EEUU High Yield',        'region': 'EEUU'},
+    'eu_ig':  {'series': 'BAMLHE00EHY0EY',   'name': 'Europa Investment Grade', 'region': 'Europa'},
+    'eu_hy':  {'series': 'BAMLHE00EHY0EY',   'name': 'Europa High Yield',       'region': 'Europa'},
+}
+
+def fetch_fred_series(series_id, limit=250):
+    """Fetch historical series from FRED."""
+    try:
+        url = "https://api.stlouisfed.org/fred/series/observations"
+        params = {
+            'series_id': series_id,
+            'api_key': FRED_API_KEY,
+            'file_type': 'json',
+            'sort_order': 'desc',
+            'limit': limit,
+            'observation_start': '2020-01-01',
+        }
+        r = requests.get(url, params=params, headers=HEADERS, timeout=15)
+        data = r.json()
+        obs = data.get('observations', [])
+        dates = []
+        values = []
+        for o in reversed(obs):
+            if o.get('value') and o['value'] != '.':
+                dates.append(o['date'])
+                values.append(round(float(o['value']), 2))
+        return dates, values
+    except Exception as e:
+        print(f"FRED series error {series_id}: {e}")
+        return [], []
+
+@app.route("/api/credit")
+def credit():
+    result = {}
+    seen_series = {}
+    
+    series_map = {
+        'us_ig': {'series': 'BAMLC0A0CM',     'name': 'Investment Grade', 'region': 'EEUU',   'type': 'ig'},
+        'us_hy': {'series': 'BAMLH0A0HYM2',   'name': 'High Yield',       'region': 'EEUU',   'type': 'hy'},
+        'eu_ig': {'series': 'BAMLHE00EHY0EY', 'name': 'Investment Grade', 'region': 'Europa', 'type': 'ig'},
+        'eu_hy': {'series': 'BAMLHE00EHY0EY', 'name': 'High Yield',       'region': 'Europa', 'type': 'hy'},
+    }
+    
+    for credit_id, info in series_map.items():
+        series = info['series']
+        # Cache series data to avoid duplicate calls
+        if series not in seen_series:
+            dates, values = fetch_fred_series(series, limit=500)
+            seen_series[series] = (dates, values)
+        else:
+            dates, values = seen_series[series]
+        
+        if values:
+            current = values[-1]
+            prev = values[-2] if len(values) > 1 else current
+            change = round(current - prev, 1)
+            # Convert to basis points (FRED data is in percentage)
+            current_pb = round(current * 100, 0)
+            prev_pb = round(prev * 100, 0)
+            change_pb = round(change * 100, 1)
+            
+            result[credit_id] = {
+                'id': credit_id,
+                'name': info['name'],
+                'region': info['region'],
+                'type': info['type'],
+                'spread': int(current_pb),
+                'change': int(change_pb),
+                'dates': dates[-252:],   # Last year
+                'values': [round(v * 100, 1) for v in values[-252:]],
+            }
+    
+    return jsonify(result)
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
