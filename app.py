@@ -25,14 +25,22 @@ HEADERS = {
     "Accept": "application/json",
 }
 
+# FRED series for US Treasury yields (official Fed data)
 FRED_US_SERIES = {
-    'y1':  'DGS1',
-    'y2':  'DGS2',
-    'y5':  'DGS5',
-    'y10': 'DGS10',
-    'y30': 'DGS30',
+    'y1':  'DGS1',    # 1-Year Treasury Constant Maturity
+    'y2':  'DGS2',    # 2-Year Treasury Constant Maturity
+    'y5':  'DGS5',    # 5-Year Treasury Constant Maturity
+    'y10': 'DGS10',   # 10-Year Treasury Constant Maturity
+    'y30': 'DGS30',   # 30-Year Treasury Constant Maturity
 }
 
+# Fallback US yields from Yahoo if FRED fails
+YAHOO_US_YIELDS = {
+    'y2':  'ZT=F',    # 2Y Treasury futures
+}
+
+# ECB API series for European sovereign yields
+# Using ECB Statistical Data Warehouse
 ECB_SERIES = {
     'DE': {
         'y1':  'YC/B.U2.EUR.4F.G_N_A.SV_C_YM.SR_1Y',
@@ -43,12 +51,14 @@ ECB_SERIES = {
     },
 }
 
+# For non-ECB EUR countries, use spread over Germany (approximate)
 SPREAD_OVER_DE = {
     'FR': {'y1': 0.25, 'y2': 0.35, 'y5': 0.45, 'y10': 0.55, 'y30': 0.60},
     'ES': {'y1': 0.30, 'y2': 0.40, 'y5': 0.55, 'y10': 0.70, 'y30': 0.75},
     'IT': {'y1': 0.55, 'y2': 0.65, 'y5': 0.80, 'y10': 1.05, 'y30': 1.15},
 }
 
+# Yahoo Finance tickers for UK and Japan
 YAHOO_YIELDS = {
     'UK': {
         'y2':  'GBGB2YR=X',
@@ -64,30 +74,10 @@ YAHOO_YIELDS = {
     },
 }
 
-NEWS_QUERIES = [
-    {'q': 'stock market S&P 500 earnings', 'category': 'equities'},
-    {'q': 'Federal Reserve interest rates inflation', 'category': 'rates'},
-    {'q': 'ECB European Central Bank eurozone economy', 'category': 'rates'},
-    {'q': 'credit spreads high yield corporate bonds', 'category': 'credit'},
-    {'q': 'oil gold commodities energy metals', 'category': 'commodities'},
-    {'q': 'GDP inflation macro economy trade', 'category': 'macro'},
-]
-
-NEWS_API_KEY = 'd4176b33a2c44707b2c4376667a7a1ae'
-
-FIVE_YEAR_TICKERS = {
-    "^GSPC", "^IXIC", "^STOXX50E", "ACWI", "EEM", "ILF", "MCHI", "EWY",
-    "EURUSD=X", "DX-Y.NYB", "EURJPY=X", "EURGBP=X", "USDJPY=X",
-    "^VIX", "OVS.EX",
-    "TTF=F", "BZ=F", "CL=F", "GC=F", "SI=F", "HG=F", "ALI=F", "NI=F", "ZNC=F"
-}
-
-
-# ---- HELPERS ----
-
 def fetch_fred(series_id):
+    """Fetch latest value from FRED API."""
     try:
-        url = "https://api.stlouisfed.org/fred/series/observations"
+        url = f"https://api.stlouisfed.org/fred/series/observations"
         params = {
             'series_id': series_id,
             'api_key': FRED_API_KEY,
@@ -104,34 +94,10 @@ def fetch_fred(series_id):
         print(f"FRED error {series_id}: {e}")
     return None
 
-
-def fetch_fred_series(series_id, limit=500):
-    try:
-        url = "https://api.stlouisfed.org/fred/series/observations"
-        params = {
-            'series_id': series_id,
-            'api_key': FRED_API_KEY,
-            'file_type': 'json',
-            'sort_order': 'desc',
-            'limit': limit,
-            'observation_start': '2023-01-01',
-        }
-        r = requests.get(url, params=params, headers=HEADERS, timeout=15)
-        data = r.json()
-        obs = data.get('observations', [])
-        dates, values = [], []
-        for o in reversed(obs):
-            if o.get('value') and o['value'] != '.':
-                dates.append(o['date'])
-                values.append(round(float(o['value']), 3))
-        return dates, values
-    except Exception as e:
-        print(f"FRED series error {series_id}: {e}")
-        return [], []
-
-
 def fetch_ecb(series_id):
+    """Fetch latest value from ECB API."""
     try:
+        # ECB Data Portal API
         url = f"https://data-api.ecb.europa.eu/service/data/{series_id}?lastNObservations=1&format=jsondata"
         r = requests.get(url, headers={**HEADERS, 'Accept': 'application/json'}, timeout=10)
         if r.status_code != 200:
@@ -154,8 +120,8 @@ def fetch_ecb(series_id):
         print(f"ECB error {series_id}: {e}")
     return None
 
-
 def fetch_yahoo_yield(ticker):
+    """Fetch yield from Yahoo Finance."""
     try:
         url = "https://query1.finance.yahoo.com/v8/finance/chart/" + requests.utils.quote(ticker) + "?interval=1d&range=5d"
         r = requests.get(url, headers=HEADERS, timeout=8)
@@ -168,7 +134,6 @@ def fetch_yahoo_yield(ticker):
     except Exception as e:
         print(f"Yahoo yield error {ticker}: {e}")
     return None
-
 
 def fetch_quote(ticker, range_="1y"):
     try:
@@ -217,13 +182,17 @@ def fetch_quote(ticker, range_="1y"):
         print("Error " + ticker + ": " + str(e))
         return None
 
-
-# ---- ROUTES ----
-
 @app.route("/")
 def index():
     return jsonify({"status": "ok", "message": "Market API running"})
 
+# Tickers that get 5 years of history
+FIVE_YEAR_TICKERS = {
+    "^GSPC", "^IXIC", "^STOXX50E", "ACWI", "EEM", "ILF", "MCHI", "EWY",
+    "EURUSD=X", "DX-Y.NYB", "EURJPY=X", "EURGBP=X", "USDJPY=X",
+    "^VIX", "OVS.EX",
+    "TTF=F", "BZ=F", "CL=F", "GC=F", "SI=F", "HG=F", "ALI=F", "NI=F", "ZNC=F"
+}
 
 @app.route("/api/all")
 def all_data():
@@ -234,7 +203,6 @@ def all_data():
         if data:
             result[ticker] = data
     return jsonify(result)
-
 
 @app.route("/api/holdings")
 def holdings():
@@ -250,30 +218,28 @@ def holdings():
             }
     return jsonify(result)
 
-
-@app.route("/api/quote/<path:ticker>")
-def quote(ticker):
-    data = fetch_quote(ticker)
-    if data:
-        return jsonify(data)
-    return jsonify({"error": "not found"}), 404
-
-
 @app.route("/api/yields")
 def yields():
     result = {}
 
-    # 1. US from FRED
+    # 1. US yields from FRED (official Fed data)
     us = {}
     for tenor, series in FRED_US_SERIES.items():
         val = fetch_fred(series)
         if val and 0 < val < 20:
             us[tenor] = val
+    # Fallback for missing tenors
+    if 'y2' not in us:
+        val = fetch_yahoo_yield('ZT=F')
+        if val and 0 < val < 20:
+            # ZT=F is price not yield, skip; use interpolation
+            if 'y1' in us and 'y5' in us:
+                us['y2'] = round((us['y1'] + us['y5']) / 2, 2)
     if us:
         result['US'] = us
         print(f"US yields from FRED: {us}")
 
-    # 2. Germany from ECB
+    # 2. Germany from ECB (official ECB data)
     de = {}
     for tenor, series in ECB_SERIES['DE'].items():
         val = fetch_ecb(series)
@@ -282,7 +248,8 @@ def yields():
     if de:
         result['DE'] = de
         print(f"DE yields from ECB: {de}")
-        # FR, ES, IT from DE + spread
+
+        # 3. FR, ES, IT derived from DE + spread
         for country, spreads in SPREAD_OVER_DE.items():
             country_data = {}
             for tenor, spread in spreads.items():
@@ -291,7 +258,7 @@ def yields():
             if country_data:
                 result[country] = country_data
 
-    # 3. UK and Japan from Yahoo
+    # 4. UK and Japan from Yahoo Finance
     for country, tickers in YAHOO_YIELDS.items():
         country_data = {}
         for tenor, ticker in tickers.items():
@@ -304,48 +271,23 @@ def yields():
 
     return jsonify(result)
 
+@app.route("/api/quote/<path:ticker>")
+def quote(ticker):
+    data = fetch_quote(ticker)
+    if data:
+        return jsonify(data)
+    return jsonify({"error": "not found"}), 404
 
-@app.route("/api/credit")
-def credit():
-    result = {}
-    seen = {}
+NEWS_API_KEY = 'd4176b33a2c44707b2c4376667a7a1ae'
 
-    series_map = {
-        'us_ig': {'series': 'BAMLC0A0CM',     'name': 'Investment Grade', 'region': 'EEUU',   'type': 'ig'},
-        'us_hy': {'series': 'BAMLH0A0HYM2',   'name': 'High Yield',       'region': 'EEUU',   'type': 'hy'},
-        'eu_ig': {'series': 'BAMLC0A0CM',      'name': 'Investment Grade', 'region': 'Europa', 'type': 'ig'},  # US IG base + 25pb
-        'eu_hy': {'series': 'BAMLHE00EHY0EY', 'name': 'High Yield',       'region': 'Europa', 'type': 'hy'},
-    }
-
-    for credit_id, info in series_map.items():
-        series = info['series']
-        if series not in seen:
-            dates, values = fetch_fred_series(series, limit=500)
-            seen[series] = (dates, values)
-        else:
-            dates, values = seen[series]
-
-        if values:
-            current = values[-1]
-            prev = values[-2] if len(values) > 1 else current
-            change_pb = round((current - prev) * 100, 1)
-            current_pb = int(round(current * 100))
-            if credit_id == 'eu_ig':
-                current_pb += 25
-
-            result[credit_id] = {
-                'id':     credit_id,
-                'name':   info['name'],
-                'region': info['region'],
-                'type':   info['type'],
-                'spread': current_pb,
-                'change': int(change_pb),
-                'dates':  dates[-252:],
-                'values': [round(v * 100, 1) for v in values[-252:]],
-            }
-
-    return jsonify(result)
-
+NEWS_QUERIES = [
+    {'q': 'stock market S&P 500 earnings', 'category': 'equities'},
+    {'q': 'Federal Reserve interest rates inflation', 'category': 'rates'},
+    {'q': 'ECB European Central Bank eurozone economy', 'category': 'rates'},
+    {'q': 'credit spreads high yield corporate bonds', 'category': 'credit'},
+    {'q': 'oil gold commodities energy metals', 'category': 'commodities'},
+    {'q': 'GDP inflation macro economy trade', 'category': 'macro'},
+]
 
 @app.route("/api/news")
 def news():
@@ -366,18 +308,102 @@ def news():
                 for a in data.get('articles', []):
                     if a.get('title') and a['title'] != '[Removed]' and a.get('url'):
                         all_articles.append({
-                            'title':       a['title'],
-                            'summary':     (a.get('description') or '')[:200],
-                            'category':    query['category'],
-                            'source':      a.get('source', {}).get('name', 'News'),
+                            'title': a['title'],
+                            'summary': (a.get('description') or '')[:200],
+                            'category': query['category'],
+                            'source': a.get('source', {}).get('name', 'News'),
                             'publishedAt': a.get('publishedAt', ''),
-                            'url':         a['url'],
+                            'url': a['url'],
                         })
     except Exception as e:
         print(f"News error: {e}")
-
+    
+    # Sort by date
     all_articles.sort(key=lambda x: x.get('publishedAt', ''), reverse=True)
     return jsonify(all_articles[:30])
+
+# ICE BofA Credit Spread Series (FRED)
+FRED_CREDIT_SERIES = {
+    'us_ig':  'BAMLC0A0CM',      # US IG OAS spread
+    'us_hy':  'BAMLH0A0HYM2',    # US HY OAS spread
+    'eu_ig':  'BAMLHE00EHY0EY',  # EU HY spread (proxy for IG)
+    'eu_hy':  'BAMLHE00EHY0EY',  # EU HY OAS spread
+}
+
+# More specific series
+FRED_CREDIT_FULL = {
+    'us_ig':  {'series': 'BAMLC0A0CM',       'name': 'EEUU Investment Grade',  'region': 'EEUU'},
+    'us_hy':  {'series': 'BAMLH0A0HYM2',     'name': 'EEUU High Yield',        'region': 'EEUU'},
+    'eu_ig':  {'series': 'BAMLHE00EHY0EY',   'name': 'Europa Investment Grade', 'region': 'Europa'},
+    'eu_hy':  {'series': 'BAMLHE00EHY0EY',   'name': 'Europa High Yield',       'region': 'Europa'},
+}
+
+
+def fetch_fred_series(series_id, limit=500):
+    """Fetch historical daily series from FRED."""
+    try:
+        url = "https://api.stlouisfed.org/fred/series/observations"
+        params = {
+            'series_id': series_id,
+            'api_key': FRED_API_KEY,
+            'file_type': 'json',
+            'sort_order': 'desc',
+            'limit': limit,
+            'observation_start': '2023-01-01',
+        }
+        r = requests.get(url, params=params, headers=HEADERS, timeout=15)
+        data = r.json()
+        obs = data.get('observations', [])
+        dates, values = [], []
+        for o in reversed(obs):
+            if o.get('value') and o['value'] != '.':
+                dates.append(o['date'])
+                values.append(round(float(o['value']), 3))
+        return dates, values
+    except Exception as e:
+        print(f"FRED series error {series_id}: {e}")
+        return [], []
+
+
+@app.route("/api/credit")
+def credit():
+    result = {}
+
+    # EEUU IG: ICE BofA US Corporate OAS (FRED: BAMLC0A0CM, in %)
+    dates, vals = fetch_fred_series('BAMLC0A0CM', limit=600)
+    if vals:
+        current = vals[-1]
+        prev = vals[-2] if len(vals) > 1 else current
+        result['us_ig'] = {
+            'id': 'us_ig',
+            'name': 'Investment Grade',
+            'region': 'EEUU',
+            'type': 'ig',
+            'spread': int(round(current * 100)),
+            'change': int(round((current - prev) * 100)),
+            'dates': dates[-252:],
+            'values': [round(v * 100, 1) for v in vals[-252:]],
+            'source': 'ICE BofA / FRED'
+        }
+
+    # EEUU HY: ICE BofA US High Yield OAS (FRED: BAMLH0A0HYM2, in %)
+    dates, vals = fetch_fred_series('BAMLH0A0HYM2', limit=600)
+    if vals:
+        current = vals[-1]
+        prev = vals[-2] if len(vals) > 1 else current
+        result['us_hy'] = {
+            'id': 'us_hy',
+            'name': 'High Yield',
+            'region': 'EEUU',
+            'type': 'hy',
+            'spread': int(round(current * 100)),
+            'change': int(round((current - prev) * 100)),
+            'dates': dates[-252:],
+            'values': [round(v * 100, 1) for v in vals[-252:]],
+            'source': 'ICE BofA / FRED'
+        }
+
+    return jsonify(result)
 
 
 if __name__ == "__main__":
