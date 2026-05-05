@@ -406,5 +406,43 @@ def credit():
     return jsonify(result)
 
 
+@app.route("/api/yields10y")
+def yields10y():
+    FRED_10Y = {
+        'US': 'DGS10',
+        'DE': 'IRLTLT01DEM156N',
+        'FR': 'IRLTLT01FRM156N',
+        'IT': 'IRLTLT01ITM156N',
+        'ES': 'IRLTLT01ESM156N',
+        'UK': 'IRLTLT01GBM156N',
+        'JP': 'IRLTLT01JPM156N',
+    }
+    result = {}
+    for country, series_id in FRED_10Y.items():
+        try:
+            url = "https://api.stlouisfed.org/fred/series/observations"
+            params = {
+                'series_id': series_id,
+                'api_key': FRED_API_KEY,
+                'file_type': 'json',
+                'sort_order': 'asc',
+                'observation_start': '2021-01-01',
+            }
+            r = requests.get(url, params=params, headers=HEADERS, timeout=12)
+            data = r.json()
+            obs = data.get('observations', [])
+            dates, values = [], []
+            for o in obs:
+                if o.get('value') and o['value'] != '.':
+                    dates.append(o['date'])
+                    values.append(round(float(o['value']), 3))
+            if dates:
+                result[country] = {'dates': dates, 'values': values}
+                print(f"yields10y {country}: {len(dates)} points, last={values[-1]}")
+        except Exception as e:
+            print(f"yields10y error {country}: {e}")
+    return jsonify(result)
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
