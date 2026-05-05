@@ -15,9 +15,14 @@ MARKET_TICKERS = [
 ]
 
 HOLDING_TICKERS = [
+    # US large caps
     "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "BRK-B", "TSLA", "AVGO",
-    "ASML", "SAP", "TSM", "BABA", "TCEHY", "PDD", "JD", "BIDU",
-    "VALE", "PBR", "ITUB", "AMX", "FMX", "BBD", "INFY", "HDB",
+    # European
+    "ASML", "SAP", "AIR.PA", "SIE.DE", "MC.PA", "TTE.PA", "BNP.PA", "DTE.DE",
+    # EM / Asia
+    "TCEHY", "BABA", "PDD", "JD", "BIDU", "INFY", "HDB", "VALE", "ITUB", "BBD", "AMX", "FMX",
+    # Korean (KRX tickers via Yahoo)
+    "005930.KS", "000660.KS", "207940.KS", "005380.KS", "035720.KS", "051910.KS", "006400.KS", "035420.KS",
 ]
 
 HEADERS = {
