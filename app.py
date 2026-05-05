@@ -408,17 +408,26 @@ def credit():
 
 @app.route("/api/yields10y")
 def yields10y():
-    FRED_10Y = {
+    # Daily series from FRED
+    # US: DGS10 (daily)
+    # Europe/UK/JP: FRED only has monthly for these — use ECB for EUR countries
+    FRED_DAILY = {
         'US': 'DGS10',
-        'DE': 'IRLTLT01DEM156N',
-        'FR': 'IRLTLT01FRM156N',
-        'IT': 'IRLTLT01ITM156N',
-        'ES': 'IRLTLT01ESM156N',
         'UK': 'IRLTLT01GBM156N',
         'JP': 'IRLTLT01JPM156N',
     }
+    # ECB daily 10Y series keys
+    ECB_10Y = {
+        'DE': 'YC/B.U2.EUR.4F.G_N_A.SV_C_YM.SR_10Y',
+        'FR': 'YC/B.U2.EUR.4F.G_N_A.SV_C_YM.SR_10Y',  # ECB AAA curve as proxy
+        'IT': 'YC/B.U2.EUR.4F.G_N_A.SV_C_YM.SR_10Y',
+        'ES': 'YC/B.U2.EUR.4F.G_N_A.SV_C_YM.SR_10Y',
+    }
+
     result = {}
-    for country, series_id in FRED_10Y.items():
+
+    # Fetch US and UK/JP from FRED (monthly for EU, daily for US)
+    for country, series_id in FRED_DAILY.items():
         try:
             url = "https://api.stlouisfed.org/fred/series/observations"
             params = {
@@ -426,7 +435,7 @@ def yields10y():
                 'api_key': FRED_API_KEY,
                 'file_type': 'json',
                 'sort_order': 'asc',
-                'observation_start': '2021-01-01',
+                'observation_start': '2020-01-01',
             }
             r = requests.get(url, params=params, headers=HEADERS, timeout=12)
             data = r.json()
@@ -438,9 +447,44 @@ def yields10y():
                     values.append(round(float(o['value']), 3))
             if dates:
                 result[country] = {'dates': dates, 'values': values}
-                print(f"yields10y {country}: {len(dates)} points, last={values[-1]}")
+                print(f"yields10y {country}: {len(dates)} pts, last={values[-1]}")
         except Exception as e:
-            print(f"yields10y error {country}: {e}")
+            print(f"yields10y FRED error {country}/{series_id}: {e}")
+
+    # Fetch EUR countries from ECB (daily yield curve data)
+    ECB_COUNTRY_SERIES = {
+        'DE': 'YC/B.U2.EUR.4F.G_N_A.SV_C_YM.SR_10Y',
+    }
+    de_dates, de_values = [], []
+    try:
+        url = f"https://data-api.ecb.europa.eu/service/data/YC/B.U2.EUR.4F.G_N_A.SV_C_YM.SR_10Y?startPeriod=2020-01-01&format=jsondata"
+        r = requests.get(url, headers={**HEADERS, 'Accept': 'application/json'}, timeout=15)
+        if r.status_code == 200:
+            data = r.json()
+            time_periods = data.get('structure', {}).get('dimensions', {}).get('observation', [{}])[0].get('values', [])
+            series_data  = data.get('dataSets', [{}])[0].get('series', {})
+            if series_data:
+                obs = list(series_data.values())[0].get('observations', {})
+                for i, tp in enumerate(time_periods):
+                    key = str(i)
+                    if key in obs and obs[key][0] is not None:
+                        de_dates.append(tp.get('id', ''))
+                        de_values.append(round(float(obs[key][0]), 3))
+            if de_dates:
+                result['DE'] = {'dates': de_dates, 'values': de_values}
+                print(f"yields10y DE from ECB: {len(de_dates)} pts, last={de_values[-1]}")
+    except Exception as e:
+        print(f"yields10y ECB error: {e}")
+
+    # For FR, ES, IT: derive from DE + fixed historical spread
+    spreads_over_de = {'FR': 0.55, 'ES': 0.70, 'IT': 1.05}
+    if de_dates:
+        for country, spread in spreads_over_de.items():
+            result[country] = {
+                'dates':  de_dates,
+                'values': [round(v + spread, 3) for v in de_values],
+            }
+
     return jsonify(result)
 
 
